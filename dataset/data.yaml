@@ -1,0 +1,13 @@
+train: ../train/images
+val: ../valid/images
+test: ../test/images
+
+nc: 12
+names: ['crimp', 'downhold', 'jib', 'jug', 'ledge', 'pinch', 'pocket', 'sidepull', 'sloper', 'tape', 'undercling', 'volume']
+
+roboflow:
+  workspace: panclimb
+  project: climbing-segmentation-lruqt
+  version: 4
+  license: Public Domain
+  url: https://universe.roboflow.com/panclimb/climbing-segmentation-lruqt/dataset/4
