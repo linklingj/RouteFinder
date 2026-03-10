@@ -1,22 +1,8 @@
-import base64
 import json
-import os
-import tempfile
-from typing import Any, Dict, List
+from typing import Any, Dict
 
 import infer
-
-from ultralytics import YOLO
-
-MODEL_PATH = "yolo26l-seg.pt"
-_model = None
-
-
-def _get_model() -> YOLO:
-    global _model
-    if _model is None:
-        _model = YOLO(MODEL_PATH)
-    return _model
+from model_loader import MODEL_PATH
 
 
 def _response(status_code: int, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -25,7 +11,6 @@ def _response(status_code: int, payload: Dict[str, Any]) -> Dict[str, Any]:
         "headers": {"Content-Type": "application/json"},
         "body": json.dumps(payload),
     }
-
 
 
 def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
@@ -52,7 +37,7 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                 },
             )
 
-        detections = infer
+        detections = infer._run_inference(image_base64)
         return _response(200, {"ok": True, "detections": detections})
 
     except Exception as exc:

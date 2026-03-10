@@ -1,7 +1,9 @@
-from ultralytics import YOLO
 import base64
 import tempfile
 from typing import Any, Dict, List
+
+from model_loader import get_model
+
 
 def _run_inference(image_base64: str) -> List[Dict[str, Any]]:
     image_bytes = base64.b64decode(image_base64)
@@ -10,7 +12,7 @@ def _run_inference(image_base64: str) -> List[Dict[str, Any]]:
         tmp.write(image_bytes)
         tmp.flush()
 
-        results = _get_model().predict(source=tmp.name, device="cpu", verbose=False)
+        results = get_model().predict(source=tmp.name, device="cpu", verbose=False)
 
     detections = []
     for result in results:
@@ -26,15 +28,14 @@ def _run_inference(image_base64: str) -> List[Dict[str, Any]]:
             )
     return detections
 
+
 def main():
-
-    model = YOLO("yolo26l-seg.pt")
-
-    model.predict(
-        source='test_images',
+    get_model().predict(
+        source="test_images",
         save=True,
-        device=0
+        device="cpu",
     )
+
 
 if __name__ == "__main__":
     main()

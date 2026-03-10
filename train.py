@@ -1,16 +1,17 @@
-from ultralytics import YOLO
+from model_loader import get_model
+
 
 def main():
-
-    model = YOLO("yolo26l-seg.pt")
+    model = get_model()
 
     model.train(
-        data='data.yaml',
+        data="dataset/data.yaml",
         epochs=10,
         batch=16,
         imgsz=640,
-        device=0
+        device=0,
     )
+
 
 if __name__ == "__main__":
     main()
