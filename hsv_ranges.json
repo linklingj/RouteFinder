@@ -1,0 +1,140 @@
+{
+  "red": [
+    {
+      "h_min": 145,
+      "h_max": 10,
+      "s_min": 109,
+      "s_max": 255,
+      "v_min": 50,
+      "v_max": 255
+    },
+    {
+      "h_min": 170,
+      "h_max": 179,
+      "s_min": 70,
+      "s_max": 255,
+      "v_min": 40,
+      "v_max": 255
+    }
+  ],
+  "orange": [
+    {
+      "h_min": 11,
+      "h_max": 22,
+      "s_min": 70,
+      "s_max": 255,
+      "v_min": 60,
+      "v_max": 255
+    }
+  ],
+  "yellow": [
+    {
+      "h_min": 23,
+      "h_max": 35,
+      "s_min": 60,
+      "s_max": 255,
+      "v_min": 80,
+      "v_max": 255
+    }
+  ],
+  "green": [
+    {
+      "h_min": 36,
+      "h_max": 85,
+      "s_min": 50,
+      "s_max": 255,
+      "v_min": 40,
+      "v_max": 255
+    }
+  ],
+  "blue": [
+    {
+      "h_min": 103,
+      "h_max": 131,
+      "s_min": 134,
+      "s_max": 255,
+      "v_min": 99,
+      "v_max": 255
+    }
+  ],
+  "light_blue": [
+    {
+      "h_min": 94,
+      "h_max": 101,
+      "s_min": 50,
+      "s_max": 255,
+      "v_min": 40,
+      "v_max": 255
+    }
+  ],
+  "navy": [
+    {
+      "h_min": 100,
+      "h_max": 130,
+      "s_min": 142,
+      "s_max": 255,
+      "v_min": 20,
+      "v_max": 150
+    }
+  ],
+  "purple": [
+    {
+      "h_min": 121,
+      "h_max": 150,
+      "s_min": 35,
+      "s_max": 255,
+      "v_min": 40,
+      "v_max": 255
+    }
+  ],
+  "pink": [
+    {
+      "h_min": 153,
+      "h_max": 171,
+      "s_min": 94,
+      "s_max": 255,
+      "v_min": 137,
+      "v_max": 255
+    }
+  ],
+  "brown": [
+    {
+      "h_min": 138,
+      "h_max": 25,
+      "s_min": 18,
+      "s_max": 87,
+      "v_min": 40,
+      "v_max": 143
+    }
+  ],
+  "white": [
+    {
+      "h_min": 0,
+      "h_max": 179,
+      "s_min": 0,
+      "s_max": 35,
+      "v_min": 186,
+      "v_max": 255
+    }
+  ],
+  "gray": [
+    {
+      "h_min": 0,
+      "h_max": 179,
+      "s_min": 0,
+      "s_max": 31,
+      "v_min": 50,
+      "v_max": 168
+    }
+  ],
+  "black": [
+    {
+      "h_min": 0,
+      "h_max": 179,
+      "s_min": 0,
+      "s_max": 255,
+      "v_min": 0,
+      "v_max": 51
+    }
+  ]
+}

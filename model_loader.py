@@ -1,6 +1,6 @@
 from ultralytics import YOLO
 
-MODEL_PATH = "models/best.pt"
+MODEL_PATH = "models/0314-2.pt"
 _model = None
 
 

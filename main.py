@@ -1,3 +1,4 @@
+import argparse
 import os
 from dataclasses import dataclass, field
 from enum import Enum
@@ -5,9 +6,20 @@ from typing import Dict, List, Tuple
 
 import cv2
 import numpy as np
+from matplotlib import pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
 
+from color_logic import (
+    DEFAULT_HSV_CONFIG_PATH,
+    HSVColorClassifier,
+    HoldColor,
+    color_to_bgr,
+    parse_hold_color,
+    tune_hsv_range,
+)
 from model_loader import get_model
-from infer import _run_inference
+
+DEFAULT_OVERLAY_ALPHA = 0.5
 
 
 class RouteDifficulty(str, Enum):
@@ -23,77 +35,10 @@ class RouteDifficulty(str, Enum):
     V8 = "V8+"
 
 
-class HoldColor(str, Enum):
-    RED = "red"
-    ORANGE = "orange"
-    YELLOW = "yellow"
-    GREEN = "green"
-    BLUE = "blue"
-    NAVY = "navy"
-    PURPLE = "purple"
-    PINK = "pink"
-    WHITE = "white"
-    GRAY = "gray"
-    BLACK = "black"
-    BROWN = "brown"
-    UNKNOWN = "unknown"
-
-
-@dataclass(frozen=True)
-class HueRange:
-    color: HoldColor
-    min_deg: int
-    max_deg: int
-
-    def contains(self, hue_deg: int) -> bool:
-        if self.min_deg <= self.max_deg:
-            return self.min_deg <= hue_deg <= self.max_deg
-        return hue_deg >= self.min_deg or hue_deg <= self.max_deg
-
-
-DEFAULT_HUE_RANGES: Tuple[HueRange, ...] = (
-    HueRange(HoldColor.RED, 345, 15),
-    HueRange(HoldColor.ORANGE, 16, 40),
-    HueRange(HoldColor.YELLOW, 41, 70),
-    HueRange(HoldColor.GREEN, 71, 165),
-    HueRange(HoldColor.BLUE, 166, 255),
-    HueRange(HoldColor.PURPLE, 256, 290),
-    HueRange(HoldColor.PINK, 291, 344),
-)
-
-
-def hue_to_hold_color(
-    hue: int,
-    *,
-    saturation: int = 255,
-    value: int = 255,
-    hue_scale: str = "opencv",
-    hue_ranges: Tuple[HueRange, ...] = DEFAULT_HUE_RANGES,
-) -> HoldColor:
-    # HSV 기반 무채색 우선 분기
-    if value <= 50:
-        return HoldColor.BLACK
-    if saturation <= 35:
-        if value >= 200:
-            return HoldColor.WHITE
-        return HoldColor.GRAY
-
-    if hue_scale == "opencv":
-        hue_deg = int(round((hue % 180) * 2))
-    elif hue_scale == "degree":
-        hue_deg = hue % 360
-    else:
-        raise ValueError("hue_scale must be either 'opencv' or 'degree'")
-
-    for band in hue_ranges:
-        if band.contains(hue_deg):
-            return band.color
-    return HoldColor.UNKNOWN
-
-
 @dataclass
 class Hold:
     hold_type: int
+    hold_type_str: str
     confidence: float
     xyxy: List[float]
     segment: List[List[float]] = field(default_factory=list)
@@ -111,16 +56,21 @@ class Tape:
 class ImageInfo:
     img: cv2.Mat
     holds: List[Hold]
+    down_holds: List[Hold]
     tapes: List[Tape]
 
-    def __init__(self, img: cv2.Mat, detections: List[Dict]):
+    def __init__(self, img: cv2.Mat, detections: List[Dict], color_classifier: HSVColorClassifier):
         self.img = img
         self.holds = []
+        self.down_holds = []
         self.tapes = []
+        self.color_classifier = color_classifier
+
         for det in detections:
             xyxy = [float(v) for v in det["xyxy"]]
             segment = [[float(p[0]), float(p[1])] for p in det.get("segment", [])]
-            if det["class_id"] == 10:
+
+            if det["class_id"] == 9:
                 self.tapes.append(
                     Tape(
                         confidence=float(det["confidence"]),
@@ -129,10 +79,22 @@ class ImageInfo:
                         tape_color=self.get_color(xyxy),
                     )
                 )
+            elif det["class_id"] == 1:
+                self.down_holds.append(
+                    Hold(
+                        hold_type=int(det["class_id"]),
+                        hold_type_str=det["class_name"],
+                        confidence=float(det["confidence"]),
+                        xyxy=xyxy,
+                        segment=segment,
+                        hold_color=self.get_color(xyxy),
+                    )
+                )
             else:
                 self.holds.append(
                     Hold(
                         hold_type=int(det["class_id"]),
+                        hold_type_str=det["class_name"],
                         confidence=float(det["confidence"]),
                         xyxy=xyxy,
                         segment=segment,
@@ -143,16 +105,7 @@ class ImageInfo:
     def get_color(self, xyxy: List[float]) -> HoldColor:
         x1, y1, x2, y2 = map(int, xyxy)
         crop = self.img[y1:y2, x1:x2]
-        if crop.size == 0:
-            return HoldColor.UNKNOWN
-        hsv_crop = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
-        hue_channel = hsv_crop[:, :, 0]
-        sat_channel = hsv_crop[:, :, 1]
-        val_channel = hsv_crop[:, :, 2]
-        mean_hue = int(hue_channel.mean())
-        mean_sat = int(sat_channel.mean())
-        mean_val = int(val_channel.mean())
-        return hue_to_hold_color(mean_hue, saturation=mean_sat, value=mean_val)
+        return self.color_classifier.classify_bgr(crop)
 
 
 @dataclass
@@ -190,6 +143,8 @@ class Route:
 
         if not closest_hold:
             return False
+
+        self.visualize_hsv(img_info, closest_hold)
 
         self.hold_color = closest_hold.hold_color.value
         for hold in img_info.holds:
@@ -230,68 +185,74 @@ class Route:
             ],
         }
 
+    def visualize_hsv(self, img_info: ImageInfo, closest_hold: Hold) -> None:
+        hsv = []
+        hsv_img = cv2.cvtColor(img_info.img, cv2.COLOR_BGR2HSV)
+        for point in closest_hold.segment:
+            point_hsv = hsv_img[int(point[1]), int(point[0])]
+            hsv.append(point_hsv)
 
-def _color_bgr(color: HoldColor) -> Tuple[int, int, int]:
-    palette = {
-        HoldColor.RED: (0, 0, 255),
-        HoldColor.ORANGE: (0, 165, 255),
-        HoldColor.YELLOW: (0, 255, 255),
-        HoldColor.GREEN: (0, 200, 0),
-        HoldColor.BLUE: (255, 120, 0),
-        HoldColor.NAVY: (180, 60, 0),
-        HoldColor.PURPLE: (180, 0, 180),
-        HoldColor.PINK: (203, 192, 255),
-        HoldColor.WHITE: (255, 255, 255),
-        HoldColor.GRAY: (150, 150, 150),
-        HoldColor.BLACK: (30, 30, 30),
-        HoldColor.BROWN: (42, 42, 165),
-        HoldColor.UNKNOWN: (128, 128, 128),
-    }
-    return palette.get(color, (128, 128, 128))
+        if not hsv:
+            return
+
+        plt.figure(figsize=(6, 4))
+        ax = plt.subplot(111, projection="3d")
+        ax.set_xlabel("Hue (OpenCV)")
+        ax.set_ylabel("Saturation")
+        ax.set_zlabel("Value")
+        ax.set_xlim(0, 180)
+        ax.set_ylim(0, 255)
+        ax.set_zlim(0, 255)
+        ax.scatter([h[0] for h in hsv], [h[1] for h in hsv], [h[2] for h in hsv], c="blue", alpha=0.5)
+        plt.title("HSV Distribution")
+        plt.show()
 
 
-def _draw_objects(base_img: cv2.Mat, holds: List[Hold], tapes: List[Tape]) -> cv2.Mat:
+def _draw_objects(
+    base_img: cv2.Mat,
+    holds: List[Hold],
+    tapes: List[Tape],
+    overlay_alpha: float = DEFAULT_OVERLAY_ALPHA,
+) -> cv2.Mat:
     canvas = base_img.copy()
     overlay = canvas.copy()
+    overlay_alpha = max(0.0, min(1.0, float(overlay_alpha)))
 
     for hold in holds:
-        color = _color_bgr(hold.hold_color)
+        color = color_to_bgr(hold.hold_color)
         if hold.segment:
             pts = np.array(hold.segment, dtype=np.int32).reshape((-1, 1, 2))
             cv2.fillPoly(overlay, [pts], color)
             cv2.polylines(canvas, [pts], isClosed=True, color=color, thickness=2)
         x1, y1, x2, y2 = map(int, hold.xyxy)
-        cv2.rectangle(canvas, (x1, y1), (x2, y2), color, 2)
-        cv2.putText(canvas, hold.hold_color.value, (x1, max(20, y1 - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+        #cv2.rectangle(canvas, (x1, y1), (x2, y2), color, 1)
+        cv2.putText(canvas, hold.hold_type_str, (x1, max(20, y1 - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
 
     for tape in tapes:
-        color = _color_bgr(tape.tape_color)
+        color = color_to_bgr(tape.tape_color)
         if tape.segment:
             pts = np.array(tape.segment, dtype=np.int32).reshape((-1, 1, 2))
             cv2.fillPoly(overlay, [pts], color)
             cv2.polylines(canvas, [pts], isClosed=True, color=color, thickness=2)
         x1, y1, x2, y2 = map(int, tape.xyxy)
-        cv2.rectangle(canvas, (x1, y1), (x2, y2), color, 2)
         cv2.putText(canvas, f"tape:{tape.tape_color.value}", (x1, max(20, y1 - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
 
-    cv2.addWeighted(overlay, 0.2, canvas, 0.8, 0, canvas)
+    cv2.addWeighted(overlay, overlay_alpha, canvas, 1.0 - overlay_alpha, 0, canvas)
     return canvas
 
 
 def _extract_detections(image_path: str) -> Tuple[cv2.Mat, List[Dict]]:
     image = cv2.imread(image_path)
     if image is None:
-        raise ValueError(f"이미지를 읽을 수 없습니다: {image_path}")
+        raise ValueError(f"Cannot load image: {image_path}")
 
     results = get_model().predict(source=image_path, device="cpu", verbose=False)
     detections: List[Dict] = []
-
     if not results:
         return image, detections
 
     result = results[0]
     masks_xy = result.masks.xy if result.masks is not None else []
-
     if result.boxes is None:
         return image, detections
 
@@ -299,16 +260,15 @@ def _extract_detections(image_path: str) -> Tuple[cv2.Mat, List[Dict]]:
         segment = []
         if i < len(masks_xy):
             segment = masks_xy[i].tolist()
-
         detections.append(
             {
                 "class_id": int(box.cls[0]),
+                "class_name": result.names[int(box.cls[0])],
                 "confidence": float(box.conf[0]),
                 "xyxy": [float(v) for v in box.xyxy[0].tolist()],
                 "segment": segment,
             }
         )
-
     return image, detections
 
 
@@ -320,33 +280,68 @@ def _on_click(event, x, y, flags, param):
     route = Route(gym="unknown", difficulty=RouteDifficulty.V0)
 
     if not route.set_route(img_info, (x, y)):
-        print("선택한 위치에서 route를 구성하지 못했습니다.")
+        print("Could not build route from the clicked position.")
         return
 
+    overlay_alpha = param.get("overlay_alpha", DEFAULT_OVERLAY_ALPHA)
     selected_tapes = [route.start_tape] if route.start_tape else []
-    route_image = _draw_objects(img_info.img, route.holds, selected_tapes)
+    route_image = _draw_objects(img_info.img, route.holds, selected_tapes, overlay_alpha=overlay_alpha)
     cv2.imshow("Route Segmentation", route_image)
 
 
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="RouteFinder")
+    parser.add_argument("--image", dest="image_path", help="Input image path")
+    parser.add_argument("--hsv-config", default=DEFAULT_HSV_CONFIG_PATH, help="HSV range config JSON path")
+    parser.add_argument("--tune-hsv", action="store_true", help="Run HSV range tuning UI instead of detection")
+    parser.add_argument("--tune-color", default=HoldColor.RED.value, help="Color name to tune (e.g. red, blue)")
+    parser.add_argument("--tune-range-index", type=int, default=0, help="Range index for selected color")
+    parser.add_argument("--overlay-alpha", type=float, default=DEFAULT_OVERLAY_ALPHA, help="Overlay alpha (0.0~1.0)")
+    return parser.parse_args()
+
+
 def main():
-    image_path = input("이미지 경로를 입력하세요: ").strip()
+    args = _parse_args()
+    image_path = args.image_path or input("Enter image path: ").strip()
     if not image_path:
-        print("이미지 경로가 비어 있습니다.")
+        print("Image path is empty.")
         return
     if not os.path.exists(image_path):
-        print(f"파일이 존재하지 않습니다: {image_path}")
+        print(f"File does not exist: {image_path}")
+        return
+
+    classifier = HSVColorClassifier.from_config(args.hsv_config)
+    overlay_alpha = max(0.0, min(1.0, float(args.overlay_alpha)))
+
+    if args.tune_hsv:
+        image = cv2.imread(image_path)
+        if image is None:
+            print(f"Cannot load image: {image_path}")
+            return
+        try:
+            tune_color = parse_hold_color(args.tune_color)
+        except ValueError as e:
+            print(str(e))
+            return
+
+        tune_hsv_range(
+            image,
+            classifier,
+            color=tune_color,
+            range_index=args.tune_range_index,
+            config_path=args.hsv_config,
+        )
         return
 
     image, detections = _extract_detections(image_path)
-    img_info = ImageInfo(image, detections)
-
-    segmented = _draw_objects(img_info.img, img_info.holds, img_info.tapes)
+    img_info = ImageInfo(image, detections, color_classifier=classifier)
+    segmented = _draw_objects(img_info.img, img_info.holds, img_info.tapes, overlay_alpha=overlay_alpha)
 
     window_name = "Segmented Holds (click to build route)"
     cv2.namedWindow(window_name)
-    cv2.setMouseCallback(window_name, _on_click, {"img_info": img_info})
+    cv2.setMouseCallback(window_name, _on_click, {"img_info": img_info, "overlay_alpha": 0.9})
     cv2.imshow(window_name, segmented)
-    print("이미지 위를 클릭하면 클릭 지점 기준 route 홀드만 별도 창에 표시됩니다. 종료: 아무 키")
+    print("Click on the image to build a route from the nearest hold. Press any key to exit.")
 
     cv2.waitKey(0)
     cv2.destroyAllWindows()

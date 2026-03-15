@@ -8,6 +8,6 @@ names: ['crimp', 'downhold', 'jib', 'jug', 'ledge', 'pinch', 'pocket', 'sidepull
 roboflow:
   workspace: panclimb
   project: climbing-segmentation-lruqt
-  version: 4
+  version: 6
   license: Public Domain
-  url: https://universe.roboflow.com/panclimb/climbing-segmentation-lruqt/dataset/4
+  url: https://universe.roboflow.com/panclimb/climbing-segmentation-lruqt/dataset/6
