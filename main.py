@@ -2,12 +2,12 @@ import argparse
 import os
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Any
 
 import cv2
 import numpy as np
 from matplotlib import pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
+from mpl_toolkits.mplot3d import Axes3D
 
 from color_logic import (
     DEFAULT_HSV_CONFIG_PATH,
@@ -18,6 +18,7 @@ from color_logic import (
     tune_hsv_range,
 )
 from model_loader import get_model
+from infer import run_inference
 
 DEFAULT_OVERLAY_ALPHA = 0.5
 
@@ -42,6 +43,7 @@ class Hold:
     confidence: float
     xyxy: List[float]
     segment: List[List[float]] = field(default_factory=list)
+    pixels: List[Tuple[int, int]] = field(default_factory=list)
     hold_color: HoldColor = HoldColor.UNKNOWN
 
 
@@ -50,6 +52,7 @@ class Tape:
     confidence: float
     xyxy: List[float]
     segment: List[List[float]] = field(default_factory=list)
+    pixels: List[Tuple[int, int]] = field(default_factory=list)
     tape_color: HoldColor = HoldColor.UNKNOWN
 
 
@@ -69,6 +72,7 @@ class ImageInfo:
         for det in detections:
             xyxy = [float(v) for v in det["xyxy"]]
             segment = [[float(p[0]), float(p[1])] for p in det.get("segment", [])]
+            pixels = [(x, y) for y, row in enumerate(det.get("pixels", [])) for x, val in enumerate(row) if val]
 
             if det["class_id"] == 9:
                 self.tapes.append(
@@ -76,6 +80,7 @@ class ImageInfo:
                         confidence=float(det["confidence"]),
                         xyxy=xyxy,
                         segment=segment,
+                        pixels=pixels,
                         tape_color=self.get_color(xyxy),
                     )
                 )
@@ -87,7 +92,8 @@ class ImageInfo:
                         confidence=float(det["confidence"]),
                         xyxy=xyxy,
                         segment=segment,
-                        hold_color=self.get_color(xyxy),
+                        pixels=pixels,
+                        hold_color=HoldColor.GRAY
                     )
                 )
             else:
@@ -98,6 +104,7 @@ class ImageInfo:
                         confidence=float(det["confidence"]),
                         xyxy=xyxy,
                         segment=segment,
+                        pixels=pixels,
                         hold_color=self.get_color(xyxy),
                     )
                 )
@@ -241,35 +248,24 @@ def _draw_objects(
     return canvas
 
 
-def _extract_detections(image_path: str) -> Tuple[cv2.Mat, List[Dict]]:
-    image = cv2.imread(image_path)
-    if image is None:
-        raise ValueError(f"Cannot load image: {image_path}")
+def _draw_route(
+    base_img: cv2.Mat, 
+    holds: List[Hold],
+    tapes: List[Tape],
+    overlay_alpha: float = DEFAULT_OVERLAY_ALPHA
+) -> cv2.Mat:
+    # all gray scale except the route holds and tapes
+    gray_canvas = cv2.cvtColor(base_img, cv2.COLOR_BGR2GRAY)
+    canvas = cv2.cvtColor(gray_canvas, cv2.COLOR_GRAY2BGR)
+    
+    for hold in holds:
+        for (x, y) in hold.pixels:
+            canvas[y, x] = base_img[y, x]
+    for tape in tapes:
+        for (x, y) in tape.pixels:
+            canvas[y, x] = color_to_bgr(tape.tape_color)
 
-    results = get_model().predict(source=image_path, device="cpu", verbose=False)
-    detections: List[Dict] = []
-    if not results:
-        return image, detections
-
-    result = results[0]
-    masks_xy = result.masks.xy if result.masks is not None else []
-    if result.boxes is None:
-        return image, detections
-
-    for i, box in enumerate(result.boxes):
-        segment = []
-        if i < len(masks_xy):
-            segment = masks_xy[i].tolist()
-        detections.append(
-            {
-                "class_id": int(box.cls[0]),
-                "class_name": result.names[int(box.cls[0])],
-                "confidence": float(box.conf[0]),
-                "xyxy": [float(v) for v in box.xyxy[0].tolist()],
-                "segment": segment,
-            }
-        )
-    return image, detections
+    return canvas
 
 
 def _on_click(event, x, y, flags, param):
@@ -285,7 +281,8 @@ def _on_click(event, x, y, flags, param):
 
     overlay_alpha = param.get("overlay_alpha", DEFAULT_OVERLAY_ALPHA)
     selected_tapes = [route.start_tape] if route.start_tape else []
-    route_image = _draw_objects(img_info.img, route.holds, selected_tapes, overlay_alpha=overlay_alpha)
+    # route_image = _draw_objects(img_info.img, route.holds, selected_tapes, overlay_alpha=overlay_alpha)
+    route_image = _draw_route(img_info.img, route.holds, selected_tapes, overlay_alpha=overlay_alpha)
     cv2.imshow("Route Segmentation", route_image)
 
 
@@ -333,7 +330,7 @@ def main():
         )
         return
 
-    image, detections = _extract_detections(image_path)
+    image, detections = run_inference(image_path)
     img_info = ImageInfo(image, detections, color_classifier=classifier)
     segmented = _draw_objects(img_info.img, img_info.holds, img_info.tapes, overlay_alpha=overlay_alpha)
 
