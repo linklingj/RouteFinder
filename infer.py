@@ -5,6 +5,7 @@ import numpy as np
 
 from model_loader import get_model
 
+DEFAULT_CONFIDENCE_THRESHOLD = 0.1
 
 def _segment_to_mask(segment: List[List[float]], image_shape: Tuple[int, int, int]) -> np.ndarray:
     h, w = image_shape[:2]
@@ -19,12 +20,15 @@ def _segment_to_mask(segment: List[List[float]], image_shape: Tuple[int, int, in
     return mask.astype(bool)
 
 
-def run_inference(image_path: str) -> Tuple[cv2.Mat, List[Dict]]:
+def run_inference(image_path: str, conf: float = DEFAULT_CONFIDENCE_THRESHOLD) -> Tuple[cv2.Mat, List[Dict]]:
     image = cv2.imread(image_path)
     if image is None:
         raise ValueError(f"Cannot load image: {image_path}")
     
-    results = get_model().predict(source=image_path, device="cpu", verbose=False)
+    results = get_model().predict(source=image_path,
+                                  device="cpu",
+                                  conf=conf,
+                                  verbose=False)
     detections = []
     if not results:
         return image, detections

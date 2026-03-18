@@ -12,6 +12,7 @@ from color_logic import (
     DEFAULT_LAB_CONFIG_PATH,
     LabColorClassifier,
     HoldColor,
+    apply_retinex,
     color_to_bgr,
     parse_hold_color,
     tune_lab_range,
@@ -19,7 +20,7 @@ from color_logic import (
 from model_loader import get_model
 from infer import run_inference
 
-DEFAULT_OVERLAY_ALPHA = 0.5
+DEFAULT_OVERLAY_ALPHA = 0.1
 
 
 class RouteDifficulty(str, Enum):
@@ -45,6 +46,7 @@ class Hold:
     pixels: List[Tuple[int, int]] = field(default_factory=list)
     hold_color: HoldColor = HoldColor.UNKNOWN
     color_ratios: Dict[HoldColor, float] = field(default_factory=dict)
+    hold_crop: np.ndarray | None = None
 
 
 @dataclass
@@ -58,12 +60,17 @@ class Tape:
 
 class ImageInfo:
     img: cv2.Mat
+    retinex_img: cv2.Mat
+    lab_img: cv2.Mat
     holds: List[Hold]
     down_holds: List[Hold]
     tapes: List[Tape]
 
     def __init__(self, img: cv2.Mat, detections: List[Dict], color_classifier: LabColorClassifier):
         self.img = img
+        # Keep preprocessing identical to LAB tuner: Retinex on full image, then LAB conversion.
+        self.retinex_img = apply_retinex(self.img)
+        self.lab_img = cv2.cvtColor(self.retinex_img, cv2.COLOR_BGR2LAB)
         self.holds = []
         self.down_holds = []
         self.tapes = []
@@ -98,7 +105,7 @@ class ImageInfo:
                     )
                 )
             else:
-                hold_color, color_ratios = self.get_color_and_ratios(xyxy, pixels)
+                hold_color, color_ratios, hold_crop = self.get_color_and_ratios(xyxy, pixels)
                 self.holds.append(
                     Hold(
                         hold_type=int(det["class_id"]),
@@ -109,39 +116,55 @@ class ImageInfo:
                         pixels=pixels,
                         hold_color=hold_color,
                         color_ratios=color_ratios,
+                        hold_crop=hold_crop,
                     )
                 )
 
     def get_color(self, xyxy: List[float], pixels: List[Tuple[int, int]]) -> HoldColor:
-        color, _ = self.get_color_and_ratios(xyxy, pixels)
+        color, _, _ = self.get_color_and_ratios(xyxy, pixels)
         return color
 
-    def get_color_and_ratios(self, xyxy: List[float], pixels: List[Tuple[int, int]]) -> Tuple[HoldColor, Dict[HoldColor, float]]:
+    def get_color_and_ratios(
+        self,
+        xyxy: List[float],
+        pixels: List[Tuple[int, int]],
+    ) -> Tuple[HoldColor, Dict[HoldColor, float], np.ndarray | None]:
         h, w = self.img.shape[:2]
         x1, y1, x2, y2 = map(int, xyxy)
         x1, y1 = max(0, x1), max(0, y1)
         x2, y2 = min(w, x2), min(h, y2)
         if x2 <= x1 or y2 <= y1:
-            return HoldColor.UNKNOWN, {}
+            return HoldColor.UNKNOWN, {}, None
 
         crop = self.img[y1:y2, x1:x2]
         if crop.size == 0:
-            return HoldColor.UNKNOWN, {}
+            return HoldColor.UNKNOWN, {}, None
+
+        # Keep a snapshot of the crop made during color classification for click-time preview.
+        saved_crop = crop.copy()
+        crop_lab = self.lab_img[y1:y2, x1:x2]
 
         local_mask = np.zeros((y2 - y1, x2 - x1), dtype=np.uint8)
         for x, y in pixels:
             if x1 <= x < x2 and y1 <= y < y2:
                 local_mask[y - y1, x - x1] = 255
 
-        if cv2.countNonZero(local_mask) == 0:
-            return (
-                self.color_classifier.classify_bgr(crop),
-                self.color_classifier.score_bgr_ratios(crop),
-            )
-        return (
-            self.color_classifier.classify_bgr(crop, mask=local_mask),
-            self.color_classifier.score_bgr_ratios(crop, mask=local_mask),
-        )
+        lab_for_scoring = crop_lab
+        if cv2.countNonZero(local_mask) > 0:
+            selected = crop_lab[local_mask.astype(bool)]
+            if selected.size > 0:
+                # Use only segmented hold pixels to avoid background-biased colors.
+                lab_for_scoring = selected.reshape((-1, 1, 3))
+
+        scores = self.color_classifier.score_lab(lab_for_scoring)
+        total_pixels = int(lab_for_scoring.shape[0] * lab_for_scoring.shape[1])
+        ratios = {
+            color: (count / total_pixels) if total_pixels > 0 else 0.0
+            for color, count in scores.items()
+        }
+        hold_color = self.color_classifier.classify_lab(lab_for_scoring)
+
+        return hold_color, ratios, saved_crop
 
 
 @dataclass
@@ -180,6 +203,7 @@ class Route:
         if not closest_hold:
             return False
 
+        self.visualize_hold_crop(closest_hold)
         self.visualize_color_ratios(closest_hold)
 
         self.hold_color = closest_hold.hold_color.value
@@ -248,6 +272,11 @@ class Route:
             plt.text(bar.get_x() + bar.get_width() / 2, value + 1.0, f"{value:.1f}%", ha="center", va="bottom", fontsize=9)
         plt.tight_layout()
         plt.show()
+
+    def visualize_hold_crop(self, closest_hold: Hold) -> None:
+        if closest_hold.hold_crop is None or closest_hold.hold_crop.size == 0:
+            return
+        cv2.imshow("Clicked Hold Crop", closest_hold.hold_crop)
 
 
 def _draw_objects(
