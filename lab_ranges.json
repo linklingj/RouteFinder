@@ -1,0 +1,132 @@
+{
+  "red": [
+    {
+      "l_min": 122,
+      "l_max": 208,
+      "a_min": 145,
+      "a_max": 160,
+      "b_min": 126,
+      "b_max": 164
+    }
+  ],
+  "orange": [
+    {
+      "l_min": 147,
+      "l_max": 215,
+      "a_min": 131,
+      "a_max": 169,
+      "b_min": 145,
+      "b_max": 176
+    }
+  ],
+  "yellow": [
+    {
+      "l_min": 155,
+      "l_max": 255,
+      "a_min": 110,
+      "a_max": 140,
+      "b_min": 146,
+      "b_max": 255
+    }
+  ],
+  "green": [
+    {
+      "l_min": 133,
+      "l_max": 238,
+      "a_min": 78,
+      "a_max": 112,
+      "b_min": 125,
+      "b_max": 156
+    }
+  ],
+  "blue": [
+    {
+      "l_min": 82,
+      "l_max": 245,
+      "a_min": 111,
+      "a_max": 138,
+      "b_min": 0,
+      "b_max": 109
+    }
+  ],
+  "light_blue": [
+    {
+      "l_min": 159,
+      "l_max": 239,
+      "a_min": 78,
+      "a_max": 118,
+      "b_min": 114,
+      "b_max": 129
+    }
+  ],
+  "navy": [
+    {
+      "l_min": 0,
+      "l_max": 80,
+      "a_min": 0,
+      "a_max": 140,
+      "b_min": 0,
+      "b_max": 110
+    }
+  ],
+  "purple": [
+    {
+      "l_min": 127,
+      "l_max": 198,
+      "a_min": 131,
+      "a_max": 193,
+      "b_min": 0,
+      "b_max": 117
+    }
+  ],
+  "pink": [
+    {
+      "l_min": 150,
+      "l_max": 255,
+      "a_min": 150,
+      "a_max": 255,
+      "b_min": 120,
+      "b_max": 160
+    }
+  ],
+  "brown": [
+    {
+      "l_min": 0,
+      "l_max": 100,
+      "a_min": 130,
+      "a_max": 160,
+      "b_min": 130,
+      "b_max": 170
+    }
+  ],
+  "white": [
+    {
+      "l_min": 245,
+      "l_max": 255,
+      "a_min": 120,
+      "a_max": 136,
+      "b_min": 120,
+      "b_max": 136
+    }
+  ],
+  "gray": [
+    {
+      "l_min": 128,
+      "l_max": 245,
+      "a_min": 120,
+      "a_max": 134,
+      "b_min": 115,
+      "b_max": 131
+    }
+  ],
+  "black": [
+    {
+      "l_min": 0,
+      "l_max": 161,
+      "a_min": 120,
+      "a_max": 136,
+      "b_min": 120,
+      "b_max": 136
+    }
+  ]
+}

@@ -7,15 +7,14 @@ from typing import Dict, List, Tuple, Any
 import cv2
 import numpy as np
 from matplotlib import pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D
 
 from color_logic import (
-    DEFAULT_HSV_CONFIG_PATH,
-    HSVColorClassifier,
+    DEFAULT_LAB_CONFIG_PATH,
+    LabColorClassifier,
     HoldColor,
     color_to_bgr,
     parse_hold_color,
-    tune_hsv_range,
+    tune_lab_range,
 )
 from model_loader import get_model
 from infer import run_inference
@@ -45,6 +44,7 @@ class Hold:
     segment: List[List[float]] = field(default_factory=list)
     pixels: List[Tuple[int, int]] = field(default_factory=list)
     hold_color: HoldColor = HoldColor.UNKNOWN
+    color_ratios: Dict[HoldColor, float] = field(default_factory=dict)
 
 
 @dataclass
@@ -62,7 +62,7 @@ class ImageInfo:
     down_holds: List[Hold]
     tapes: List[Tape]
 
-    def __init__(self, img: cv2.Mat, detections: List[Dict], color_classifier: HSVColorClassifier):
+    def __init__(self, img: cv2.Mat, detections: List[Dict], color_classifier: LabColorClassifier):
         self.img = img
         self.holds = []
         self.down_holds = []
@@ -81,7 +81,7 @@ class ImageInfo:
                         xyxy=xyxy,
                         segment=segment,
                         pixels=pixels,
-                        tape_color=self.get_color(xyxy),
+                        tape_color=self.get_color(xyxy, pixels),
                     )
                 )
             elif det["class_id"] == 1:
@@ -93,10 +93,12 @@ class ImageInfo:
                         xyxy=xyxy,
                         segment=segment,
                         pixels=pixels,
-                        hold_color=HoldColor.GRAY
+                        hold_color=HoldColor.GRAY,
+                        color_ratios={HoldColor.GRAY: 1.0},
                     )
                 )
             else:
+                hold_color, color_ratios = self.get_color_and_ratios(xyxy, pixels)
                 self.holds.append(
                     Hold(
                         hold_type=int(det["class_id"]),
@@ -105,14 +107,41 @@ class ImageInfo:
                         xyxy=xyxy,
                         segment=segment,
                         pixels=pixels,
-                        hold_color=self.get_color(xyxy),
+                        hold_color=hold_color,
+                        color_ratios=color_ratios,
                     )
                 )
 
-    def get_color(self, xyxy: List[float]) -> HoldColor:
+    def get_color(self, xyxy: List[float], pixels: List[Tuple[int, int]]) -> HoldColor:
+        color, _ = self.get_color_and_ratios(xyxy, pixels)
+        return color
+
+    def get_color_and_ratios(self, xyxy: List[float], pixels: List[Tuple[int, int]]) -> Tuple[HoldColor, Dict[HoldColor, float]]:
+        h, w = self.img.shape[:2]
         x1, y1, x2, y2 = map(int, xyxy)
+        x1, y1 = max(0, x1), max(0, y1)
+        x2, y2 = min(w, x2), min(h, y2)
+        if x2 <= x1 or y2 <= y1:
+            return HoldColor.UNKNOWN, {}
+
         crop = self.img[y1:y2, x1:x2]
-        return self.color_classifier.classify_bgr(crop)
+        if crop.size == 0:
+            return HoldColor.UNKNOWN, {}
+
+        local_mask = np.zeros((y2 - y1, x2 - x1), dtype=np.uint8)
+        for x, y in pixels:
+            if x1 <= x < x2 and y1 <= y < y2:
+                local_mask[y - y1, x - x1] = 255
+
+        if cv2.countNonZero(local_mask) == 0:
+            return (
+                self.color_classifier.classify_bgr(crop),
+                self.color_classifier.score_bgr_ratios(crop),
+            )
+        return (
+            self.color_classifier.classify_bgr(crop, mask=local_mask),
+            self.color_classifier.score_bgr_ratios(crop, mask=local_mask),
+        )
 
 
 @dataclass
@@ -151,7 +180,7 @@ class Route:
         if not closest_hold:
             return False
 
-        self.visualize_hsv(img_info, closest_hold)
+        self.visualize_color_ratios(closest_hold)
 
         self.hold_color = closest_hold.hold_color.value
         for hold in img_info.holds:
@@ -192,26 +221,32 @@ class Route:
             ],
         }
 
-    def visualize_hsv(self, img_info: ImageInfo, closest_hold: Hold) -> None:
-        hsv = []
-        hsv_img = cv2.cvtColor(img_info.img, cv2.COLOR_BGR2HSV)
-        for point in closest_hold.segment:
-            point_hsv = hsv_img[int(point[1]), int(point[0])]
-            hsv.append(point_hsv)
-
-        if not hsv:
+    def visualize_color_ratios(self, closest_hold: Hold) -> None:
+        if not closest_hold.color_ratios:
             return
 
-        plt.figure(figsize=(6, 4))
-        ax = plt.subplot(111, projection="3d")
-        ax.set_xlabel("Hue (OpenCV)")
-        ax.set_ylabel("Saturation")
-        ax.set_zlabel("Value")
-        ax.set_xlim(0, 180)
-        ax.set_ylim(0, 255)
-        ax.set_zlim(0, 255)
-        ax.scatter([h[0] for h in hsv], [h[1] for h in hsv], [h[2] for h in hsv], c="blue", alpha=0.5)
-        plt.title("HSV Distribution")
+        sorted_items = sorted(closest_hold.color_ratios.items(), key=lambda item: item[1], reverse=True)
+        labels = [color.value for color, ratio in sorted_items if ratio > 0]
+        values = [ratio * 100.0 for _, ratio in sorted_items if ratio > 0]
+
+        if not labels:
+            return
+
+        bar_colors = []
+        for color, ratio in sorted_items:
+            if ratio <= 0:
+                continue
+            bgr = color_to_bgr(color)
+            bar_colors.append((bgr[2] / 255.0, bgr[1] / 255.0, bgr[0] / 255.0))
+
+        plt.figure(figsize=(8, 4))
+        bars = plt.bar(labels, values, color=bar_colors)
+        plt.ylim(0, 100)
+        plt.ylabel("ratio (%)")
+        plt.title("Clicked Hold Color Ratios")
+        for bar, value in zip(bars, values):
+            plt.text(bar.get_x() + bar.get_width() / 2, value + 1.0, f"{value:.1f}%", ha="center", va="bottom", fontsize=9)
+        plt.tight_layout()
         plt.show()
 
 
@@ -289,8 +324,8 @@ def _on_click(event, x, y, flags, param):
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="RouteFinder")
     parser.add_argument("--image", dest="image_path", help="Input image path")
-    parser.add_argument("--hsv-config", default=DEFAULT_HSV_CONFIG_PATH, help="HSV range config JSON path")
-    parser.add_argument("--tune-hsv", action="store_true", help="Run HSV range tuning UI instead of detection")
+    parser.add_argument("--lab-config", default=DEFAULT_LAB_CONFIG_PATH, help="LAB range config JSON path")
+    parser.add_argument("--tune-lab", action="store_true", help="Run LAB range tuning UI instead of detection")
     parser.add_argument("--tune-color", default=HoldColor.RED.value, help="Color name to tune (e.g. red, blue)")
     parser.add_argument("--tune-range-index", type=int, default=0, help="Range index for selected color")
     parser.add_argument("--overlay-alpha", type=float, default=DEFAULT_OVERLAY_ALPHA, help="Overlay alpha (0.0~1.0)")
@@ -307,10 +342,10 @@ def main():
         print(f"File does not exist: {image_path}")
         return
 
-    classifier = HSVColorClassifier.from_config(args.hsv_config)
+    classifier = LabColorClassifier.from_config(args.lab_config)
     overlay_alpha = max(0.0, min(1.0, float(args.overlay_alpha)))
 
-    if args.tune_hsv:
+    if args.tune_lab:
         image = cv2.imread(image_path)
         if image is None:
             print(f"Cannot load image: {image_path}")
@@ -321,12 +356,12 @@ def main():
             print(str(e))
             return
 
-        tune_hsv_range(
+        tune_lab_range(
             image,
             classifier,
             color=tune_color,
             range_index=args.tune_range_index,
-            config_path=args.hsv_config,
+            config_path=args.lab_config,
         )
         return
 

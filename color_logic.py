@@ -6,9 +6,56 @@ from typing import Dict, List, Mapping, MutableMapping, Tuple
 
 import cv2
 import numpy as np
+from matplotlib import pyplot as plt
+
+def single_scale_retinex(img: np.ndarray, sigma: float) -> np.ndarray:
+    retinex = np.log10(img) - np.log10(cv2.GaussianBlur(img, (0, 0), sigma))
+    return retinex
 
 
-DEFAULT_HSV_CONFIG_PATH = "hsv_ranges.json"
+def multi_scale_retinex(img: np.ndarray, sigma_list: List[float]) -> np.ndarray:
+    retinex = np.zeros_like(img)
+    for sigma in sigma_list:
+        retinex += single_scale_retinex(img, sigma)
+    retinex = retinex / len(sigma_list)
+    return retinex
+
+
+def color_restoration(img: np.ndarray, alpha: float, beta: float) -> np.ndarray:
+    img_sum = np.sum(img, axis=2, keepdims=True)
+    color_restoration = beta * (np.log10(alpha * img) - np.log10(img_sum))
+    return color_restoration
+
+
+def apply_retinex(img: np.ndarray) -> np.ndarray:
+    if img.size == 0:
+        return img
+    sigma_list = [15.0, 80.0, 250.0]
+    G = 5.0
+    b = 25.0
+    alpha = 125.0
+    beta = 46.0
+
+    img_float = np.float64(img) + 1.0
+    msr = multi_scale_retinex(img_float, sigma_list)
+    cr = color_restoration(img_float, alpha, beta)
+    msrcr = G * (msr * cr - b)
+
+    # Normalize each channel robustly so the image does not collapse to near-black.
+    normalized = np.zeros_like(msrcr)
+    for ch in range(msrcr.shape[2]):
+        channel = msrcr[:, :, ch]
+        low, high = np.percentile(channel, (1, 99))
+        if high - low < 1e-6:
+            normalized[:, :, ch] = np.clip(channel, 0, 255)
+            continue
+        normalized[:, :, ch] = (channel - low) * (255.0 / (high - low))
+
+    normalized = np.clip(normalized, 0, 255)
+    return np.uint8(normalized)
+
+
+DEFAULT_LAB_CONFIG_PATH = "lab_ranges.json"
 
 
 class HoldColor(str, Enum):
@@ -43,62 +90,50 @@ CHROMATIC_COLORS = {
 
 
 @dataclass(frozen=True)
-class HSVRange:
-    h_min: int
-    h_max: int
-    s_min: int
-    s_max: int
-    v_min: int
-    v_max: int
+class LabRange:
+    l_min: int
+    l_max: int
+    a_min: int
+    a_max: int
+    b_min: int
+    b_max: int
 
-    def clamp(self) -> "HSVRange":
-        return HSVRange(
-            h_min=max(0, min(179, int(self.h_min))),
-            h_max=max(0, min(179, int(self.h_max))),
-            s_min=max(0, min(255, int(self.s_min))),
-            s_max=max(0, min(255, int(self.s_max))),
-            v_min=max(0, min(255, int(self.v_min))),
-            v_max=max(0, min(255, int(self.v_max))),
+    def clamp(self) -> "LabRange":
+        return LabRange(
+            l_min=max(0, min(255, int(self.l_min))),
+            l_max=max(0, min(255, int(self.l_max))),
+            a_min=max(0, min(255, int(self.a_min))),
+            a_max=max(0, min(255, int(self.a_max))),
+            b_min=max(0, min(255, int(self.b_min))),
+            b_max=max(0, min(255, int(self.b_max))),
         )
 
-    def to_mask(self, hsv_image: np.ndarray) -> np.ndarray:
+    def to_mask(self, lab_image: np.ndarray) -> np.ndarray:
         r = self.clamp()
-        if r.h_min <= r.h_max:
-            lower = np.array([r.h_min, r.s_min, r.v_min], dtype=np.uint8)
-            upper = np.array([r.h_max, r.s_max, r.v_max], dtype=np.uint8)
-            return cv2.inRange(hsv_image, lower, upper)
-
-        lower_1 = np.array([0, r.s_min, r.v_min], dtype=np.uint8)
-        upper_1 = np.array([r.h_max, r.s_max, r.v_max], dtype=np.uint8)
-        lower_2 = np.array([r.h_min, r.s_min, r.v_min], dtype=np.uint8)
-        upper_2 = np.array([179, r.s_max, r.v_max], dtype=np.uint8)
-        mask_1 = cv2.inRange(hsv_image, lower_1, upper_1)
-        mask_2 = cv2.inRange(hsv_image, lower_2, upper_2)
-        return cv2.bitwise_or(mask_1, mask_2)
+        lower = np.array([r.l_min, r.a_min, r.b_min], dtype=np.uint8)
+        upper = np.array([r.l_max, r.a_max, r.b_max], dtype=np.uint8)
+        return cv2.inRange(lab_image, lower, upper)
 
 
-DEFAULT_HSV_RANGES: Dict[HoldColor, List[HSVRange]] = {
-    HoldColor.RED: [
-        HSVRange(0, 10, 70, 255, 40, 255),
-        HSVRange(170, 179, 70, 255, 40, 255),
-    ],
-    HoldColor.ORANGE: [HSVRange(11, 22, 70, 255, 60, 255)],
-    HoldColor.YELLOW: [HSVRange(23, 35, 60, 255, 80, 255)],
-    HoldColor.GREEN: [HSVRange(36, 85, 50, 255, 40, 255)],
-    HoldColor.BLUE: [HSVRange(86, 120, 60, 255, 40, 255)],
-    HoldColor.LIGHT_BLUE: [HSVRange(100, 130, 50, 255, 40, 255)],
-    HoldColor.NAVY: [HSVRange(100, 130, 80, 255, 20, 150)],
-    HoldColor.PURPLE: [HSVRange(121, 150, 50, 255, 40, 255)],
-    HoldColor.PINK: [HSVRange(151, 169, 40, 255, 80, 255)],
-    HoldColor.BROWN: [HSVRange(8, 25, 80, 255, 20, 180)],
-    HoldColor.WHITE: [HSVRange(0, 179, 0, 45, 180, 255)],
-    HoldColor.GRAY: [HSVRange(0, 179, 0, 45, 60, 179)],
-    HoldColor.BLACK: [HSVRange(0, 179, 0, 255, 0, 59)],
+DEFAULT_LAB_RANGES: Dict[HoldColor, List[LabRange]] = {
+    HoldColor.RED: [LabRange(0, 255, 150, 255, 0, 255)],
+    HoldColor.ORANGE: [LabRange(0, 255, 140, 180, 150, 255)],
+    HoldColor.YELLOW: [LabRange(0, 255, 110, 140, 150, 255)],
+    HoldColor.GREEN: [LabRange(0, 255, 0, 120, 128, 255)],
+    HoldColor.BLUE: [LabRange(0, 255, 0, 140, 0, 120)],
+    HoldColor.LIGHT_BLUE: [LabRange(100, 255, 0, 128, 0, 128)],
+    HoldColor.NAVY: [LabRange(0, 80, 0, 140, 0, 110)],
+    HoldColor.PURPLE: [LabRange(0, 255, 140, 255, 0, 120)],
+    HoldColor.PINK: [LabRange(150, 255, 150, 255, 120, 160)],
+    HoldColor.BROWN: [LabRange(0, 100, 130, 160, 130, 170)],
+    HoldColor.WHITE: [LabRange(200, 255, 120, 136, 120, 136)],
+    HoldColor.GRAY: [LabRange(80, 180, 120, 136, 120, 136)],
+    HoldColor.BLACK: [LabRange(0, 50, 120, 136, 120, 136)],
 }
 
 
-def _copy_ranges(ranges: Mapping[HoldColor, List[HSVRange]]) -> Dict[HoldColor, List[HSVRange]]:
-    return {color: [HSVRange(**asdict(r)) for r in entries] for color, entries in ranges.items()}
+def _copy_ranges(ranges: Mapping[HoldColor, List[LabRange]]) -> Dict[HoldColor, List[LabRange]]:
+    return {color: [LabRange(**asdict(r)) for r in entries] for color, entries in ranges.items()}
 
 
 def parse_hold_color(value: str) -> HoldColor:
@@ -129,27 +164,27 @@ def color_to_bgr(color: HoldColor) -> Tuple[int, int, int]:
     return palette.get(color, (128, 128, 128))
 
 
-def load_hsv_ranges(config_path: str = DEFAULT_HSV_CONFIG_PATH) -> Dict[HoldColor, List[HSVRange]]:
+def load_lab_ranges(config_path: str = DEFAULT_LAB_CONFIG_PATH) -> Dict[HoldColor, List[LabRange]]:
     path = Path(config_path)
     if not path.exists():
-        return _copy_ranges(DEFAULT_HSV_RANGES)
+        return _copy_ranges(DEFAULT_LAB_RANGES)
 
     with path.open("r", encoding="utf-8") as f:
         payload = json.load(f)
 
-    loaded = _copy_ranges(DEFAULT_HSV_RANGES)
+    loaded = _copy_ranges(DEFAULT_LAB_RANGES)
     for key, ranges in payload.items():
         try:
             color = parse_hold_color(key)
         except ValueError:
             continue
-        loaded[color] = [HSVRange(**entry).clamp() for entry in ranges]
+        loaded[color] = [LabRange(**entry).clamp() for entry in ranges]
     return loaded
 
 
-def save_hsv_ranges(
-    ranges: Mapping[HoldColor, List[HSVRange]],
-    config_path: str = DEFAULT_HSV_CONFIG_PATH,
+def save_lab_ranges(
+    ranges: Mapping[HoldColor, List[LabRange]],
+    config_path: str = DEFAULT_LAB_CONFIG_PATH,
 ) -> None:
     serializable: MutableMapping[str, List[Dict[str, int]]] = {}
     for color, entries in ranges.items():
@@ -159,41 +194,41 @@ def save_hsv_ranges(
         json.dump(serializable, f, ensure_ascii=False, indent=2)
 
 
-class HSVColorClassifier:
+class LabColorClassifier:
     def __init__(
         self,
-        ranges: Mapping[HoldColor, List[HSVRange]] | None = None,
+        ranges: Mapping[HoldColor, List[LabRange]] | None = None,
         *,
         min_match_ratio: float = 0.03,
-        chromatic_preference_ratio: float = 0.42,
+        chromatic_preference_ratio: float = 0.08,
     ):
-        source = ranges if ranges is not None else DEFAULT_HSV_RANGES
+        source = ranges if ranges is not None else DEFAULT_LAB_RANGES
         self.ranges = _copy_ranges(source)
         self.min_match_ratio = min_match_ratio
         self.chromatic_preference_ratio = chromatic_preference_ratio
 
     @classmethod
-    def from_config(cls, config_path: str = DEFAULT_HSV_CONFIG_PATH) -> "HSVColorClassifier":
-        return cls(load_hsv_ranges(config_path))
+    def from_config(cls, config_path: str = DEFAULT_LAB_CONFIG_PATH) -> "LabColorClassifier":
+        return cls(load_lab_ranges(config_path))
 
-    def score_hsv(self, hsv_image: np.ndarray) -> Dict[HoldColor, int]:
+    def score_lab(self, lab_image: np.ndarray) -> Dict[HoldColor, int]:
         scores: Dict[HoldColor, int] = {}
         for color, entries in self.ranges.items():
             if not entries:
                 scores[color] = 0
                 continue
-            mask = np.zeros(hsv_image.shape[:2], dtype=np.uint8)
+            mask = np.zeros(lab_image.shape[:2], dtype=np.uint8)
             for entry in entries:
-                mask = cv2.bitwise_or(mask, entry.to_mask(hsv_image))
+                mask = cv2.bitwise_or(mask, entry.to_mask(lab_image))
             scores[color] = int(cv2.countNonZero(mask))
         return scores
 
-    def classify_hsv(self, hsv_image: np.ndarray) -> HoldColor:
-        total_pixels = int(hsv_image.shape[0] * hsv_image.shape[1])
+    def classify_lab(self, lab_image: np.ndarray) -> HoldColor:
+        total_pixels = int(lab_image.shape[0] * lab_image.shape[1])
         if total_pixels <= 0:
             return HoldColor.UNKNOWN
 
-        scores = self.score_hsv(hsv_image)
+        scores = self.score_lab(lab_image)
         best_color, best_count = max(scores.items(), key=lambda item: item[1], default=(HoldColor.UNKNOWN, 0))
         best_ratio = best_count / total_pixels
         if best_ratio < self.min_match_ratio:
@@ -208,20 +243,51 @@ class HSVColorClassifier:
 
         return best_color
 
-    def classify_bgr(self, bgr_image: np.ndarray) -> HoldColor:
+    def classify_bgr(self, bgr_image: np.ndarray, mask: np.ndarray | None = None) -> HoldColor:
         if bgr_image.size == 0:
             return HoldColor.UNKNOWN
-        hsv_image = cv2.cvtColor(bgr_image, cv2.COLOR_BGR2HSV)
-        return self.classify_hsv(hsv_image)
+        retinex_image = apply_retinex(bgr_image)
+        lab_image = cv2.cvtColor(retinex_image, cv2.COLOR_BGR2LAB)
+
+        if mask is not None:
+            valid = mask.astype(bool)
+            selected = lab_image[valid]
+            if selected.size == 0:
+                return HoldColor.UNKNOWN
+            # Evaluate only masked pixels to avoid background-biased color scores.
+            lab_image = selected.reshape((-1, 1, 3))
+
+        return self.classify_lab(lab_image)
+
+    def score_bgr_ratios(self, bgr_image: np.ndarray, mask: np.ndarray | None = None) -> Dict[HoldColor, float]:
+        if bgr_image.size == 0:
+            return {color: 0.0 for color in self.ranges.keys()}
+
+        retinex_image = apply_retinex(bgr_image)
+        lab_image = cv2.cvtColor(retinex_image, cv2.COLOR_BGR2LAB)
+
+        if mask is not None:
+            valid = mask.astype(bool)
+            selected = lab_image[valid]
+            if selected.size == 0:
+                return {color: 0.0 for color in self.ranges.keys()}
+            lab_image = selected.reshape((-1, 1, 3))
+
+        scores = self.score_lab(lab_image)
+        total_pixels = int(lab_image.shape[0] * lab_image.shape[1])
+        if total_pixels <= 0:
+            return {color: 0.0 for color in scores.keys()}
+
+        return {color: (count / total_pixels) for color, count in scores.items()}
 
 
-def tune_hsv_range(
+def tune_lab_range(
     image_bgr: np.ndarray,
-    classifier: HSVColorClassifier,
+    classifier: LabColorClassifier,
     *,
     color: HoldColor,
     range_index: int = 0,
-    config_path: str = DEFAULT_HSV_CONFIG_PATH,
+    config_path: str = DEFAULT_LAB_CONFIG_PATH,
 ) -> None:
     if image_bgr is None or image_bgr.size == 0:
         raise ValueError("Image is empty.")
@@ -230,38 +296,45 @@ def tune_hsv_range(
 
     ranges = classifier.ranges.setdefault(color, [])
     while len(ranges) <= range_index:
-        ranges.append(HSVRange(0, 179, 0, 255, 0, 255))
+        ranges.append(LabRange(0, 255, 0, 255, 0, 255))
 
     base = ranges[range_index].clamp()
-    hsv_image = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2HSV)
+    
+    retinex_image = apply_retinex(image_bgr)
+    lab_image = cv2.cvtColor(retinex_image, cv2.COLOR_BGR2LAB)
+    base_preview = image_bgr.copy()
 
-    window_name = f"HSV Tuner - {color.value}[{range_index}]"
+    window_name = f"LAB Tuner - {color.value}[{range_index}]"
     cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
 
-    cv2.createTrackbar("H min", window_name, base.h_min, 179, lambda _: None)
-    cv2.createTrackbar("H max", window_name, base.h_max, 179, lambda _: None)
-    cv2.createTrackbar("S min", window_name, base.s_min, 255, lambda _: None)
-    cv2.createTrackbar("S max", window_name, base.s_max, 255, lambda _: None)
-    cv2.createTrackbar("V min", window_name, base.v_min, 255, lambda _: None)
-    cv2.createTrackbar("V max", window_name, base.v_max, 255, lambda _: None)
+    cv2.createTrackbar("L min", window_name, base.l_min, 255, lambda _: None)
+    cv2.createTrackbar("L max", window_name, base.l_max, 255, lambda _: None)
+    cv2.createTrackbar("A min", window_name, base.a_min, 255, lambda _: None)
+    cv2.createTrackbar("A max", window_name, base.a_max, 255, lambda _: None)
+    cv2.createTrackbar("B min", window_name, base.b_min, 255, lambda _: None)
+    cv2.createTrackbar("B max", window_name, base.b_max, 255, lambda _: None)
 
     current = base
-    print("HSV tuner controls: press 's' to save, 'q' or ESC to exit.")
+    print("LAB tuner controls: press 's' to save, 'q' or ESC to exit.")
 
     while True:
-        current = HSVRange(
-            h_min=cv2.getTrackbarPos("H min", window_name),
-            h_max=cv2.getTrackbarPos("H max", window_name),
-            s_min=cv2.getTrackbarPos("S min", window_name),
-            s_max=cv2.getTrackbarPos("S max", window_name),
-            v_min=cv2.getTrackbarPos("V min", window_name),
-            v_max=cv2.getTrackbarPos("V max", window_name),
+        current = LabRange(
+            l_min=cv2.getTrackbarPos("L min", window_name),
+            l_max=cv2.getTrackbarPos("L max", window_name),
+            a_min=cv2.getTrackbarPos("A min", window_name),
+            a_max=cv2.getTrackbarPos("A max", window_name),
+            b_min=cv2.getTrackbarPos("B min", window_name),
+            b_max=cv2.getTrackbarPos("B max", window_name),
         ).clamp()
 
-        mask = current.to_mask(hsv_image)
-        masked = cv2.bitwise_and(image_bgr, image_bgr, mask=mask)
+        mask = current.to_mask(lab_image)
+        masked = cv2.bitwise_and(base_preview, base_preview, mask=mask)
         mask_bgr = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
-        preview = np.hstack([image_bgr, mask_bgr, masked])
+        preview = np.hstack([base_preview, mask_bgr, masked])
+
+        matched = int(cv2.countNonZero(mask))
+        total = int(mask.shape[0] * mask.shape[1])
+        ratio = (matched / total) if total > 0 else 0.0
 
         cv2.putText(
             preview,
@@ -272,6 +345,15 @@ def tune_hsv_range(
             (0, 255, 0),
             2,
         )
+        cv2.putText(
+            preview,
+            f"match: {matched}/{total} ({ratio * 100:.2f}%)",
+            (10, 52),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            (0, 255, 255),
+            2,
+        )
         cv2.imshow(window_name, preview)
 
         key = cv2.waitKey(30) & 0xFF
@@ -279,7 +361,7 @@ def tune_hsv_range(
             break
         if key == ord("s"):
             ranges[range_index] = current
-            save_hsv_ranges(classifier.ranges, config_path=config_path)
+            save_lab_ranges(classifier.ranges, config_path=config_path)
             print(f"Saved {color.value}[{range_index}] to {config_path}: {asdict(current)}")
 
     ranges[range_index] = current
