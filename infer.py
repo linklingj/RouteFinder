@@ -5,7 +5,7 @@ import numpy as np
 
 from model_loader import get_model
 
-DEFAULT_CONFIDENCE_THRESHOLD = 0.1
+DEFAULT_CONFIDENCE_THRESHOLD = 0.08
 
 def _segment_to_mask(segment: List[List[float]], image_shape: Tuple[int, int, int]) -> np.ndarray:
     h, w = image_shape[:2]

@@ -200,7 +200,7 @@ class LabColorClassifier:
         ranges: Mapping[HoldColor, List[LabRange]] | None = None,
         *,
         min_match_ratio: float = 0.03,
-        chromatic_preference_ratio: float = 0.05,
+        chromatic_preference_ratio: float = 0.07,
     ):
         source = ranges if ranges is not None else DEFAULT_LAB_RANGES
         self.ranges = _copy_ranges(source)
