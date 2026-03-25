@@ -203,31 +203,73 @@ class Route:
         if not closest_hold:
             return False
 
-        self.visualize_hold_crop(closest_hold)
-        self.visualize_color_ratios(closest_hold)
+        # self.visualize_hold_crop(closest_hold)
+        # self.visualize_color_ratios(closest_hold)
 
         self.hold_color = closest_hold.hold_color.value
         for hold in img_info.holds:
             if hold.hold_color == closest_hold.hold_color:
                 self.add_hold(hold)
 
+        # 홀드들에서 인접 테이프 모두 저장
+        # 두개 이상 같은 색 테이프 있으면 스타트와 엔드로 저장
+
         if img_info.tapes:
-            min_tape_dist, closest_tape = float("inf"), None
+            tape_meta = []
             for tape in img_info.tapes:
-                tape_center = (
-                    (tape.xyxy[0] + tape.xyxy[2]) / 2,
-                    (tape.xyxy[1] + tape.xyxy[3]) / 2,
+                tape_w = tape.xyxy[2] - tape.xyxy[0]
+                tape_h = tape.xyxy[3] - tape.xyxy[1]
+                tape_center = ((tape.xyxy[0] + tape.xyxy[2]) / 2, (tape.xyxy[1] + tape.xyxy[3]) / 2)
+                tape_diag = ((tape_w/2) ** 2 + (tape_h/2) ** 2) ** 0.5
+                tape_meta.append((tape, tape_center, tape_diag))
+
+            adj_tapes_by_color: Dict[HoldColor, List[Tape]] = {}
+            seen_tape_ids = set()
+
+            for hold in self.holds:
+                hold_w = hold.xyxy[2] - hold.xyxy[0]
+                hold_h = hold.xyxy[3] - hold.xyxy[1]
+                hold_center = ((hold.xyxy[0] + hold.xyxy[2]) / 2, (hold.xyxy[1] + hold.xyxy[3]) / 2)
+                hold_diag = ((hold_w/2) ** 2 + (hold_h/2) ** 2) ** 0.5
+
+                for tape, tape_center, tape_diag in tape_meta:
+                    dist = ((hold_center[0] - tape_center[0]) ** 2 + (hold_center[1] - tape_center[1]) ** 2) ** 0.5
+                    # 간단한 인접 조건: 중심 간 거리 < 홀드 대각선 길이 + 테이프 대각선 길이
+                    if dist >= hold_diag + tape_diag:
+                        continue
+
+                    tape_id = id(tape)
+                    if tape_id in seen_tape_ids:
+                        continue
+
+                    seen_tape_ids.add(tape_id)
+                    if tape.tape_color not in adj_tapes_by_color:
+                        adj_tapes_by_color[tape.tape_color] = []
+                    adj_tapes_by_color[tape.tape_color].append(tape)
+
+            candidate_groups = [
+                (color, tapes)
+                for color, tapes in adj_tapes_by_color.items()
+                if color != HoldColor.UNKNOWN and len(tapes) >= 2
+            ]
+
+            if candidate_groups:
+                # 가장 위/아래 간격이 큰 색을 선택
+                selected_color, selected_tapes = max(
+                    candidate_groups,
+                    key=lambda item: (
+                        max(((t.xyxy[1] + t.xyxy[3]) / 2) for t in item[1])
+                        - min(((t.xyxy[1] + t.xyxy[3]) / 2) for t in item[1]),
+                    ),
                 )
-                dist = ((tape_center[0] - ref_hold_pos[0]) ** 2 + (tape_center[1] - ref_hold_pos[1]) ** 2) ** 0.5
-                if dist < min_tape_dist:
-                    min_tape_dist, closest_tape = dist, tape
-            if closest_tape:
-                self.start_tape = closest_tape
-                self.tape_color = closest_tape.tape_color.value
+                sorted_by_y = sorted(selected_tapes, key=lambda t: (t.xyxy[1] + t.xyxy[3]) / 2)
+                self.end_tape = sorted_by_y[0]
+                self.start_tape = sorted_by_y[-1]
+                self.tape_color = selected_color.value
 
         print(
             f"Route set: hold_color={self.hold_color}, tape_color={self.tape_color}, "
-            f"holds={len(self.holds)}, start_tape={self.start_tape is not None}"
+            f"holds={len(self.holds)}, start_tape={self.start_tape is not None}, end_tape={self.end_tape is not None}"
         )
         return True
 
@@ -344,7 +386,9 @@ def _on_click(event, x, y, flags, param):
         return
 
     overlay_alpha = param.get("overlay_alpha", DEFAULT_OVERLAY_ALPHA)
-    selected_tapes = [route.start_tape] if route.start_tape else []
+    selected_tapes = []
+    selected_tapes.append(route.start_tape) if route.start_tape else None
+    selected_tapes.append(route.end_tape) if route.end_tape else None
     # route_image = _draw_objects(img_info.img, route.holds, selected_tapes, overlay_alpha=overlay_alpha)
     route_image = _draw_route(img_info.img, route.holds, selected_tapes, overlay_alpha=overlay_alpha)
     cv2.imshow("Route Segmentation", route_image)
