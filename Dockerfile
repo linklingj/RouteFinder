@@ -1,16 +1,18 @@
 FROM public.ecr.aws/lambda/python:3.11
 
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1 \
-    MODEL_PATH=/var/task/yolo26l-seg.pt
+# 작업 디렉토리
+WORKDIR ${LAMBDA_TASK_ROOT}
 
-COPY requirements.txt ${LAMBDA_TASK_ROOT}/requirements.txt
+# 의존성 설치
+COPY requirements.txt .
+RUN pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir -r requirements.txt
 
-RUN pip install --upgrade pip && \
-    pip install -r ${LAMBDA_TASK_ROOT}/requirements.txt
+# 소스 복사
+COPY lambda_function.py .
+COPY infer.py .
+COPY model_loader.py .
+COPY models ./models
 
-COPY lambda_function.py ${LAMBDA_TASK_ROOT}/lambda_function.py
-COPY yolo26l-seg.pt ${LAMBDA_TASK_ROOT}/yolo26l-seg.pt
-
+# Lambda 핸들러 지정
 CMD ["lambda_function.lambda_handler"]
