@@ -16,7 +16,7 @@ from color_logic import HoldColor, color_to_bgr, parse_hold_color
 DEFAULT_API_URL = "https://rwgwtrnbs4tsxmdlxu4r6bq2km0lkgyw.lambda-url.ap-northeast-2.on.aws/"
 DEFAULT_CONF = 0.5
 AUTHOR_NAME = "Jaehyun Choi"
-GITHUB_URL = "https://github.com/linklingj/RouteFinder"
+GITHUB_URL = "https://github.com/linklingj/ClimbingRouteFinder"
 SAMPLE_IMAGES = {
     "example1": Path("input/example1.jpg"),
     "example2": Path("input/example2.jpg"),
