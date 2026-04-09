@@ -6,8 +6,8 @@ from pathlib import Path
 # ==============================
 # 설정
 # ==============================
-IMAGE_PATH = "input/theclimb1.jpeg"  # 테스트 이미지 경로
-LAMBDA_URL = "https://7bikf37uxfvble7avhpcvfn46q0omusw.lambda-url.ap-northeast-2.on.aws/"  # Function URL 넣기
+IMAGE_PATH = "input/example1.jpg"  # 테스트 이미지 경로
+LAMBDA_URL = "https://rwgwtrnbs4tsxmdlxu4r6bq2km0lkgyw.lambda-url.ap-northeast-2.on.aws/"  # Function URL 넣기
 CONF = 0.5
 
 

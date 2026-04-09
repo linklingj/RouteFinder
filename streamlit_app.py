@@ -1,6 +1,8 @@
 import base64
 import hashlib
 import json
+import os
+from pathlib import Path
 from typing import Any, Dict, List
 
 import cv2
@@ -11,10 +13,14 @@ from PIL import Image
 from streamlit_image_coordinates import streamlit_image_coordinates
 from color_logic import HoldColor, color_to_bgr, parse_hold_color
 
-DEFAULT_API_URL = "https://7bikf37uxfvble7avhpcvfn46q0omusw.lambda-url.ap-northeast-2.on.aws/"
+DEFAULT_API_URL = "https://rwgwtrnbs4tsxmdlxu4r6bq2km0lkgyw.lambda-url.ap-northeast-2.on.aws/"
 DEFAULT_CONF = 0.5
 AUTHOR_NAME = "Jaehyun Choi"
 GITHUB_URL = "https://github.com/linklingj/RouteFinder"
+SAMPLE_IMAGES = {
+    "example1": Path("input/example1.jpg"),
+    "example2": Path("input/example2.jpg"),
+}
 
 
 def init_state() -> None:
@@ -42,6 +48,17 @@ def clear_result_state() -> None:
     st.session_state.route_result = None
 
 
+def set_input_image(file_bytes: bytes) -> None:
+    upload_token = hashlib.md5(file_bytes).hexdigest()
+    if upload_token == st.session_state.upload_token:
+        return
+    st.session_state.upload_token = upload_token
+    st.session_state.image_bytes = file_bytes
+    st.session_state.image_bgr = decode_image(file_bytes)
+    st.session_state.image_base64 = image_to_base64(file_bytes)
+    clear_result_state()
+
+
 def decode_image(file_bytes: bytes) -> np.ndarray:
     image_array = np.frombuffer(file_bytes, dtype=np.uint8)
     image = cv2.imdecode(image_array, cv2.IMREAD_COLOR)
@@ -55,10 +72,33 @@ def image_to_base64(file_bytes: bytes) -> str:
 
 
 def parse_api_response(response: requests.Response) -> Dict[str, Any]:
+    payload: Any = None
+    raw_text = response.text.strip()
+    content_type = response.headers.get("content-type", "")
+
     try:
         payload = response.json()
-    except Exception as exc:
-        raise RuntimeError("API 응답이 JSON 형식이 아닙니다.") from exc
+    except Exception:
+        if raw_text:
+            try:
+                payload = json.loads(raw_text)
+            except Exception:
+                payload = None
+
+    if payload is None:
+        preview = raw_text[:300] if raw_text else "<empty>"
+        raise RuntimeError(
+            f"API 응답 JSON 파싱 실패 (status={response.status_code}, content-type={content_type}). "
+            f"응답 본문: {preview}"
+        )
+
+    if isinstance(payload, str):
+        text_payload = payload.strip()
+        if text_payload:
+            try:
+                payload = json.loads(text_payload)
+            except Exception:
+                pass
 
     if isinstance(payload, dict) and "body" in payload:
         body = payload.get("body")
@@ -293,30 +333,53 @@ def selected_hold_text(selected_hold: Dict[str, Any] | None) -> str:
     )
 
 
+def render_sample_icon(sample_key: str, sample_path: Path) -> None:
+    if not sample_path.exists():
+        st.caption(f"{sample_key}: 파일 없음")
+        return
+    image_b64 = base64.b64encode(sample_path.read_bytes()).decode("utf-8")
+    st.markdown(
+        (
+            f"<a href='?sample={sample_key}'>"
+            f"<img src='data:image/jpeg;base64,{image_b64}' "
+            "style='width:100px;height:100px;object-fit:cover;border-radius:10px;border:1px solid #d1d5db;'/>"
+            "</a>"
+        ),
+        unsafe_allow_html=True,
+    )
+    st.caption(sample_key)
+
+
 def main() -> None:
     st.set_page_config(page_title="Route Finder", layout="wide")
     init_state()
 
     st.title("Route Finder")
     st.write("클라이밍장 이미지에서 홀드를 탐지하고, 특정 홀드를 선택하면 해당 홀드가 포함된 루트를 시각화합니다.")
+    api_url = os.getenv("ROUTE_FINDER_API_URL", DEFAULT_API_URL).strip()
+    sample_key = st.query_params.get("sample")
+    if isinstance(sample_key, str) and sample_key in SAMPLE_IMAGES:
+        sample_path = SAMPLE_IMAGES[sample_key]
+        if sample_path.exists():
+            set_input_image(sample_path.read_bytes())
+        else:
+            st.warning(f"샘플 이미지를 찾을 수 없습니다: {sample_path}")
+        st.query_params.clear()
 
     left_col, right_col = st.columns([1, 1.35], gap="large")
     with left_col:
         st.subheader("입력")
-        api_url = st.text_input("Lambda API URL", value=DEFAULT_API_URL).strip()
         conf = st.number_input("Confidence", min_value=0.0, max_value=1.0, value=float(DEFAULT_CONF), step=0.01, format="%.2f")
+        st.caption("예시 이미지 (아이콘 클릭 시 입력 이미지로 로드)")
+        sample_col1, sample_col2 = st.columns(2)
+        with sample_col1:
+            render_sample_icon("example1", SAMPLE_IMAGES["example1"])
+        with sample_col2:
+            render_sample_icon("example2", SAMPLE_IMAGES["example2"])
 
         uploaded = st.file_uploader("이미지 업로드 (jpg, jpeg, png)", type=["jpg", "jpeg", "png"])
         if uploaded is not None:
-            file_bytes = uploaded.getvalue()
-            upload_token = hashlib.md5(file_bytes).hexdigest()
-
-            if upload_token != st.session_state.upload_token:
-                st.session_state.upload_token = upload_token
-                st.session_state.image_bytes = file_bytes
-                st.session_state.image_bgr = decode_image(file_bytes)
-                st.session_state.image_base64 = image_to_base64(file_bytes)
-                clear_result_state()
+            set_input_image(uploaded.getvalue())
 
         if st.session_state.image_bgr is not None:
             st.image(cv2.cvtColor(st.session_state.image_bgr, cv2.COLOR_BGR2RGB), caption="업로드 이미지", use_container_width=True)
@@ -328,7 +391,7 @@ def main() -> None:
         if st.session_state.image_base64 == "":
             st.error("먼저 이미지를 업로드하세요.")
         elif not api_url:
-            st.error("API URL을 입력하세요.")
+            st.error("서버 URL 설정이 비어 있습니다. `ROUTE_FINDER_API_URL` 환경변수를 확인하세요.")
         else:
             try:
                 result = call_api(
@@ -382,7 +445,7 @@ def main() -> None:
         elif st.session_state.selected_click is None:
             st.error("먼저 이미지에서 홀드를 선택하세요.")
         elif not api_url:
-            st.error("API URL을 입력하세요.")
+            st.error("서버 URL 설정이 비어 있습니다. `ROUTE_FINDER_API_URL` 환경변수를 확인하세요.")
         else:
             try:
                 result = call_api(
@@ -428,6 +491,14 @@ def main() -> None:
                     st.write(f"- {hold_name}: {count}")
             else:
                 st.write("- 없음")
+
+            st.write("루트 홀드 리스트 (홀드 종류)")
+            route_holds = route.get("holds", [])
+            if isinstance(route_holds, list) and route_holds:
+                for i, hold in enumerate(route_holds, start=1):
+                    st.write(f"{i}. {hold.get('class_name', 'unknown')}")
+            else:
+                st.write("1. 없음")
 
     st.markdown("---")
     st.markdown(f"제작자: **{AUTHOR_NAME}**")
