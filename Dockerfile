@@ -12,6 +12,8 @@ RUN pip install --no-cache-dir --upgrade pip \
 COPY lambda_function.py .
 COPY infer.py .
 COPY model_loader.py .
+COPY color_logic.py .
+COPY lab_ranges.json .
 COPY models ./models
 
 # Lambda 핸들러 지정
