@@ -78,4 +78,6 @@ test_images/
 
 # If dataset should be local-only, uncomment below
 dataset/
+
 FRONTEND.md
+request_test.py
