@@ -1,11 +1,5 @@
-﻿numpy==1.26.4
-scipy==1.13.1
-contourpy==1.2.1
+﻿
 matplotlib==3.8.3
-torch==2.5.1
-torchvision==0.20.1
-ultralytics-opencv-headless==8.4.21
-ultralytics-thop==2.0.18
 
 streamlit>=1.32,<2
 streamlit-image-coordinates>=0.1.9,<0.2

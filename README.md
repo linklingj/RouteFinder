@@ -11,13 +11,14 @@
 ## 개요
 RouteFinder는 **Computer Vision + Deep Learning**으로 클라이밍 벽 이미지에서 홀드(및 테이프)를 세그멘테이션하고, 사용자가 클릭한 홀드를 기준으로 동일 색상 루트를 자동 추출하는 프로젝트입니다.
 
-포트폴리오 관점에서 다음 역량을 보여주도록 설계했습니다.
+개발 포인트
 - 세그멘테이션 기반 객체 인식 파이프라인 구축
 - 조명 변화에 강인한 색상 분류(LAB + Retinex) 적용
 - 추론 API(AWS Lambda)와 UI(Streamlit) 분리 배포
 - 추론 결과를 사람 중심 인터랙션(클릭 기반 루트 탐색)으로 연결
 
-이미지 자리: 프로젝트 대표 이미지
+![image](demo/result.gif)
+
 
 ## 데모
 사용 흐름
@@ -68,7 +69,26 @@ RouteFinder는 **Computer Vision + Deep Learning**으로 클라이밍 벽 이미
   - 장점: UI 실험과 추론 API를 독립적으로 개발/배포 가능
   - 트레이드오프: 네트워크 왕복 지연과 응답 파싱 복잡도 증가
 
-이미지 자리: 시스템 아키텍처 다이어그램
+```mermaid
+flowchart LR
+    U[사용자]
+    B[브라우저]
+    F[Streamlit Frontend<br/>streamlit_app.py]
+    A[AWS Lambda API<br/>lambda_function.py]
+    M[YOLO Segmentation<br/>model_loader.py + infer.py]
+    C[Color Classification<br/>color_logic.py]
+    R[Route Builder<br/>click 기반 루트 탐색]
+    P[결과 시각화<br/>오버레이 + 루트 강조]
+
+    U --> B --> F
+    F -->|action: predict/find_route<br/>image_base64 + conf + click| A
+    A --> M
+    M -->|detections + masks| C
+    C --> R
+    R -->|detections + route JSON| A
+    A --> F
+    F --> P --> B
+```
 
 ## 데이터 전처리
 - 이미지 디코딩 후 세그멘트 폴리곤을 마스크로 변환
@@ -93,15 +113,9 @@ RouteFinder는 **Computer Vision + Deep Learning**으로 클라이밍 벽 이미
 - `dropout=0.2`
 - `device=0` (GPU 학습)
 
-의사결정 및 트레이드오프
-- 고해상도 입력(`imgsz=780`)은 작은 홀드 경계 복원에 유리하지만,
-  학습/추론 시간과 메모리 사용량이 증가합니다.
-
-이미지 자리: 모델 추론 예시
+![image](demo/holds.png)
 
 ## 학습 평가
-현재 저장소에는 정량 지표 로그(예: mAP, Precision/Recall)가 README에 고정되어 있지 않으므로,
-포트폴리오 제출 시 아래 형식으로 실험 결과를 채워 넣는 것을 권장합니다.
 
 권장 평가 항목
 - Detection/Segmentation: mAP@0.5, mAP@0.5:0.95
@@ -111,9 +125,10 @@ RouteFinder는 **Computer Vision + Deep Learning**으로 클라이밍 벽 이미
 
 의사결정 및 트레이드오프
 - 단순 mAP만으로는 실제 사용자 경험(루트 탐색 성공 여부)을 충분히 설명하기 어렵기 때문에,
-  서비스 지표(클릭 기반 성공률)를 함께 관리하는 전략을 사용합니다.
+  서비스 지표를 함께 관리하는 전략을 사용
+- 클라이밍 홀드 분류 문제 특성상 false-negative를 최소화하는 것이 중요하다고 판단해 낮은 conf를 선택하는 것이 유리
 
-이미지 자리: 평가 결과 표/그래프
+![image](demo/f1-curve.png)
 
 ## 배포
 ### 1) API 배포 (AWS Lambda)
@@ -137,7 +152,33 @@ streamlit run streamlit_app.py
 - Streamlit을 사용해 프로토타입 속도를 높였고,
   커스텀 UX 요구가 커질 경우 React/Next.js로 이관하는 확장 전략을 고려할 수 있습니다.
 
-이미지 자리: 배포 구조도
+```mermaid
+flowchart TB
+    subgraph Dev[개발 환경]
+        D1[학습 서버/로컬 GPU]
+        D2[train.py]
+        D3[모델 아티팩트<br/>models/0314-2.pt]
+        D1 --> D2 --> D3
+    end
+
+    subgraph AWS[배포: AWS]
+        ECR[ECR 이미지]
+        L[AWS Lambda 컨테이너<br/>Python 3.11]
+        URL[Lambda Function URL]
+        ECR --> L --> URL
+    end
+
+    subgraph FE[프론트 배포]
+        S[Streamlit 앱<br/>streamlit_app.py]
+    end
+
+    Repo[GitHub Repository] --> ECR
+    Repo --> S
+    D3 --> ECR
+    User[사용자 브라우저] --> S
+    S -->|HTTPS API 호출| URL
+    URL -->|JSON 응답| S
+```
 
 ---
 

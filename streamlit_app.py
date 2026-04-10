@@ -412,31 +412,6 @@ def main() -> None:
             except Exception as exc:
                 st.error(str(exc))
 
-    detections = st.session_state.detections
-    selected_hold = None
-    with right_col:
-        st.subheader("결과")
-        if isinstance(detections, list) and detections:
-            st.caption("검출 결과 (이미지에서 홀드를 직접 클릭)")
-            preview = draw_detections(st.session_state.image_bgr, detections, st.session_state.selected_hold_id)
-            click = streamlit_image_coordinates(Image.fromarray(preview), key="hold-selector")
-
-            if click and "x" in click and "y" in click:
-                click_xy = (int(click["x"]), int(click["y"]))
-                if click_xy != st.session_state.last_click:
-                    st.session_state.last_click = click_xy
-                    picked = pick_hold_from_click(click_xy[0], click_xy[1], detections)
-                    if picked is not None:
-                        st.session_state.selected_hold_id = int(picked.get("id", -1))
-                        st.session_state.selected_click = {"x": click_xy[0], "y": click_xy[1]}
-                        st.session_state.route_result = None
-                    st.rerun()
-
-            selected_hold = next((d for d in detections if int(d.get("id", -1)) == st.session_state.selected_hold_id), None)
-            st.info(selected_hold_text(selected_hold))
-        else:
-            st.caption("탐지 결과가 아직 없습니다.")
-
     if route_clicked:
         if st.session_state.image_base64 == "":
             st.error("먼저 이미지를 업로드하세요.")
@@ -468,9 +443,12 @@ def main() -> None:
             except Exception as exc:
                 st.error(str(exc))
 
+    detections = st.session_state.detections
+    selected_hold = None
     with right_col:
+        st.subheader("결과")
         if st.session_state.route_result:
-            st.subheader("루트 시각화")
+            st.caption("루트 결과")
             route_preview = draw_route(
                 st.session_state.image_bgr,
                 st.session_state.detections,
@@ -499,6 +477,26 @@ def main() -> None:
                     st.write(f"{i}. {hold.get('class_name', 'unknown')}")
             else:
                 st.write("1. 없음")
+        elif isinstance(detections, list) and detections:
+            st.caption("검출 결과 (이미지에서 홀드를 직접 클릭)")
+            preview = draw_detections(st.session_state.image_bgr, detections, st.session_state.selected_hold_id)
+            click = streamlit_image_coordinates(Image.fromarray(preview), key="hold-selector")
+
+            if click and "x" in click and "y" in click:
+                click_xy = (int(click["x"]), int(click["y"]))
+                if click_xy != st.session_state.last_click:
+                    st.session_state.last_click = click_xy
+                    picked = pick_hold_from_click(click_xy[0], click_xy[1], detections)
+                    if picked is not None:
+                        st.session_state.selected_hold_id = int(picked.get("id", -1))
+                        st.session_state.selected_click = {"x": click_xy[0], "y": click_xy[1]}
+                        st.session_state.route_result = None
+                    st.rerun()
+
+            selected_hold = next((d for d in detections if int(d.get("id", -1)) == st.session_state.selected_hold_id), None)
+            st.info(selected_hold_text(selected_hold))
+        else:
+            st.caption("탐지 결과가 아직 없습니다.")
 
     st.markdown("---")
     st.markdown(f"제작자: **{AUTHOR_NAME}**")
